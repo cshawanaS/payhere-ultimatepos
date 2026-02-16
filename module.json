@@ -1,0 +1,15 @@
+{
+    "name": "PayHere",
+    "alias": "payhere",
+    "description": "PayHere Payment Integration for UltimatePOS",
+    "keywords": [
+        "payment",
+        "payhere",
+        "sri lanka"
+    ],
+    "priority": 0,
+    "providers": [
+        "Modules\\PayHere\\Providers\\PayHereServiceProvider"
+    ],
+    "files": []
+}
