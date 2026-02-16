@@ -100,3 +100,5 @@ This module was built with a **"Resilience First"** mindset:
 
 ---
 *Built for reliability. Powered by PayHere. Optimized for UltimatePOS.*
+
+![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/cshawanaS/payhere-ultimatepos?utm_source=oss&utm_medium=github&utm_campaign=cshawanaS%2Fpayhere-ultimatepos&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
