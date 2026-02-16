@@ -28,41 +28,75 @@ Payment gateways need a "Webhook" (Notify URL) to tell your site a payment was s
 
 ---
 
-## �️ Installation Guide (For Beginners)
+## 🛠️ Installation & Activation Guide
 
 If you have "Zero Knowledge" of coding, just follow these simple steps:
 
-### Step 1: Move the Folder
+### Step 1: Upload the Module
 1. Download the `PayHere` module folder.
 2. Upload it to the `Modules` directory of your UltimatePOS installation (usually found at `htdocs/your-site/Modules`).
+3. Ensure the folder name is exactly `PayHere`.
 
-### Step 2: Initialize the Database
-1. Open your terminal (SSH) and navigate to your site folder.
-2. Run this command:
-   ```bash
-   php artisan module:migrate PayHere
-   ```
-   *This sets up the special settings table for your credentials.*
+### Step 2: Activate & Auto-Install
+1. Log in to your UltimatePOS as an **Admin**.
+2. Go to **Settings** -> **Modules**.
+3. Find **PayHere** in the list and click **Activate** or **Install**.
+4. **Important**: Using the UI button is recommended because it automatically:
+   - Creates the necessary database tables.
+   - Injects the "Pay with PayHere" button into your Invoice views.
+   - Sets up the secure webhook connection.
 
-### Step 3: Configure your Credentials
-1. Log in to your UltimatePOS as **Admin**.
-2. Go to the sidebar and find **PayHere Settings** (at the bottom).
-3. Enter your **Merchant ID** and **Secret** (You can get these from your PayHere.lk Dashboard).
-4. Set the **Mode** to "Sandbox" to test with fake money, or "Live" for real sales.
-
-### Step 4: Map your Slot
-1. Choose an empty **Payment Slot Mapping** (e.g., "Slot 2").
-2. Type "PayHere" in the **Display Label** field.
-3. Click **Update Settings**. 
-
-**You are now ready to accept payments!** 🎉
+### Step 3: Manual Fallback (Optional)
+If you are a developer or the UI activation didn't run migrations, you can manually run:
+```bash
+php artisan module:migrate PayHere
+```
+*Note: This only handles the database; it won't inject the view hooks automatically.*
 
 ---
 
-## � Technical Excellence (What we fixed)
-- **Signature Verification**: Implemented standard MD5 hash matching for secure, tamper-proof transactions.
-- **Log Sanitation**: Suppressed noisy "Validation Failed" warnings during browser redirects to keep your server logs clean and meaningful.
-- **Idempotency**: Prevents duplicate payments from being recorded if a customer refreshes the page or the webhook fires twice.
+## ⚙️ Configuration (The Easy Way)
+
+1. Go to the sidebar and find **PayHere Settings** (usually at the bottom).
+2. Enter your **Merchant ID** and **Merchant Secret** (Found in your PayHere Dashboard).
+3. Set the **Mode** to "Sandbox" for testing or "Live" for real sales.
+4. **Payment Slot Mapping**: Choose an empty slot (e.g., "Slot 2").
+5. **Display Label**: Type "Pay with PayHere" or just "PayHere". 
+6. Click **Update Settings**. 
 
 ---
-*Built for reliability. Powered by PayHere. Supported by you.*
+
+## 💳 Payment Behavior & Visibility
+
+### How it works for the Customer:
+- When a customer views their invoice or goes to pay in the POS/Web, they will see a button labeled **"Pay with PayHere"** (or whatever you named it in Step 4).
+- Clicking the button opens the **PayHere Secure Popup**.
+- The customer enters their card/mobile wallet details and completes the payment **without leaving your site**.
+- Once successful, the popup closes, and the invoice is automatically marked as **Paid**.
+
+### Where to see payments in Back-Office:
+- **Invoice Overview**: The status will change from "Due" to "Paid" instantly.
+- **Payment History**: Under the invoice details, you will see a payment record with the method "PayHere" and the PayHere Transaction ID as the reference.
+- **Reports**: All PayHere payments are recorded in your "Payment Accounts" and "Register Reports" just like Cash or Card.
+
+---
+
+## 🏗️ Technical Build & Core Ideas
+
+This module was built with a **"Resilience First"** mindset:
+
+- **Stack**: Powered by **PHP 8.x** and **Laravel 9**, following the UltimatePOS Module architecture.
+- **Signature Matching**: We use the official PayHere MD5 Hashing algorithm to verify every signal coming from PayHere, ensuring no one can "fake" a payment.
+- **Session Mocking**: Since Webhooks (Notify URLs) happen between servers (no user logged in), we mock the Business Owner's session so that other modules (like Accounting or Logging) don't crash when they look for a "logged-in user."
+- **Clean Logs**: We suppressed noisy validation warnings during simple browser redirects to keep your `laravel.log` file focused on what matters.
+
+---
+
+## 📚 Resources
+
+- [Official PayHere API Documentation](https://support.payhere.lk/api-&-mobile-sdk/checkout-api)
+- [UltimatePOS Documentation](https://ultimatepos.com/docs/)
+- [PayHere Merchant Dashboard](https://www.payhere.lk/account/login)
+
+---
+*Built for reliability. Powered by PayHere. Optimized for UltimatePOS.*
