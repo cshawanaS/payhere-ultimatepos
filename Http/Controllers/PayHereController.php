@@ -86,7 +86,10 @@ class PayHereController extends Controller
                     'account_id' => $request->input('payhere_account_id'),
                     'pos_account_id' => $request->input('payhere_pos_account_id'),
                     'mode' => $request->input('payhere_mode'),
-                    'payment_method' => $request->input('payhere_payment_method')
+                    'payment_method' => $request->input('payhere_payment_method'),
+                    'fee_percentage' => $request->input('payhere_fee_percentage', 3.00),
+                    'max_fee_amount' => $request->input('payhere_max_fee_amount', 0),
+                    'enable_fee' => $request->has('payhere_enable_fee')
                 ]
             );
 
@@ -296,7 +299,11 @@ class PayHereController extends Controller
                                  ->exists();
     }
 
-    private function processPayment($transaction, $amount, $currency, $payment_id, $payhere_setting)
+    /**
+     * Process PayHere Payment - Option B: Add Fee FIRST, then record full payment
+     * This ensures invoice balance matches payment amount, preventing customer credit
+     */
+    private function processPayment($transaction, $amount, $currency, $payment_id, $payHereSetting)
     {
         // Fix: Mock session 'user.id' for Accounting Module compatibility
         // The Accounting module listener calls request()->session()->get('user.id')
@@ -312,32 +319,86 @@ class PayHereController extends Controller
             $total_paid_already = $this->transactionUtil->getTotalPaid($transaction->id);
             $current_inv_balance = $transaction->final_total - $total_paid_already;
 
-            $target_account_id = $payhere_setting->pos_account_id ?? null;
-            $payment_method = $payhere_setting->payment_method ?? 'custom_pay_1';
+            // Detect if convenience fee was added (payment amount > invoice balance)
+            $convenience_fee = 0;
+            
+            if ($amount > $current_inv_balance) {
+                $convenience_fee = round($amount - $current_inv_balance, 2);
+                
+                // SECURITY: Check max fee limit
+                $max_fee = $payHereSetting->max_fee_amount ?? 0;
+                if ($max_fee > 0 && $convenience_fee > $max_fee) {
+                    $convenience_fee = $max_fee;
+                }
+                
+                // Add convenience fee to invoice FIRST (like manual invoice with additional expenses)
+                // Only if not already added
+                if (empty($transaction->additional_expense_key_1) || $transaction->additional_expense_key_1 !== 'PayHere Convenience Fee') {
+                    $transaction->additional_expense_key_1 = 'PayHere Convenience Fee';
+                    $transaction->additional_expense_value_1 = $convenience_fee;
+                    
+                    // CRITICAL: Manually add fee to final_total
+                    // UltimatePOS doesn't auto-calculate final_total when saving additional_expense directly
+                    $transaction->final_total = $transaction->final_total + $convenience_fee;
+                    $transaction->save();
+                    
+                    Log::info("PayHere Module: Convenience fee added to invoice", [
+                        'transaction_id' => $transaction->id,
+                        'fee' => $convenience_fee,
+                        'old_total' => $transaction->final_total - $convenience_fee,
+                        'new_total' => $transaction->final_total
+                    ]);
+                    
+                    // Refresh to get updated final_total
+                    $transaction = Transaction::where('id', $transaction->id)->lockForUpdate()->first();
+                }
+                
+                // RECALCULATE balance AFTER adding fee - this is the key!
+                // Now the invoice total includes the fee, so balance should match payment
+                $total_paid_already = $this->transactionUtil->getTotalPaid($transaction->id);
+                $current_inv_balance = $transaction->final_total - $total_paid_already;
+            }
+
+            $target_account_id = $payHereSetting->pos_account_id ?? null;
+            $payment_method = $payHereSetting->payment_method ?? 'custom_pay_1';
 
             // Use the now authenticated user ID (from session mock) or fallback to 1
             $created_by = session('user.id') ?? (auth()->id() ?? 1);
 
+            // Build payment note with fee information
+            $note = 'Online Payment Ref: ' . $payment_id . ' (' . $currency . ')';
+            if ($convenience_fee > 0) {
+                $note .= ' - Incl. Convenience Fee: ' . $currency . ' ' . number_format($convenience_fee, 2);
+            }
+
+            // Record FULL payment amount (including fee) - like normal invoice payment
+            $payment_amount = $amount;
+
             $payment_data = [
                 'transaction_id' => $transaction->id,
                 'business_id'    => $transaction->business_id,
-                'amount'         => $amount,
+                'amount'         => $payment_amount,
                 'method'         => $payment_method,
                 'transaction_no' => $payment_id,
                 'account_id'     => $target_account_id,
                 'paid_on'        => Carbon::now()->toDateTimeString(),
                 'created_by'     => $created_by,
                 'payment_for'    => $transaction->contact_id,
-                'note'           => 'Online Payment Ref: ' . $payment_id . ' (' . $currency . ')',
+                'note'           => $note,
                 'payment_ref_no' => $this->transactionUtil->generateReferenceNumber('sell_payment', $this->transactionUtil->setAndGetReferenceCount('sell_payment', $transaction->business_id), $transaction->business_id)
             ];
 
             $payment = TransactionPayment::create($payment_data);
 
-            if ($amount > ($current_inv_balance + 0.01)) {
-                $excess = $this->transactionUtil->payAtOnce($payment, 'sell');
-                if ($excess > 0) {
-                    $this->transactionUtil->updateContactBalance($transaction->contact_id, $excess, 'add');
+            // Check for overpayment (only when NO convenience fee was added)
+            // When fee was added, balance now matches payment, so no overpayment/credit
+            if ($convenience_fee == 0) {
+                $updated_inv_balance = $transaction->final_total - $total_paid_already;
+                if ($amount > ($updated_inv_balance + 0.01)) {
+                    $excess = $this->transactionUtil->payAtOnce($payment, 'sell');
+                    if ($excess > 0) {
+                        $this->transactionUtil->updateContactBalance($transaction->contact_id, $excess, 'add');
+                    }
                 }
             }
 
@@ -350,7 +411,13 @@ class PayHereController extends Controller
             $this->transactionUtil->updatePaymentStatus($transaction->id, $transaction->final_total);
             
             DB::commit();
-            Log::info("PayHere Module: Payment Processed Success", ['order_id' => $transaction->invoice_no]);
+            Log::info("PayHere Module: Payment Processed Success", [
+                'order_id' => $transaction->invoice_no,
+                'payment_amount' => $payment_amount,
+                'invoice_total' => $transaction->final_total,
+                'convenience_fee' => $convenience_fee,
+                'balance_after_payment' => $transaction->final_total - $total_paid_already - $payment_amount
+            ]);
 
         } catch (\Exception $e) {
             DB::rollBack();

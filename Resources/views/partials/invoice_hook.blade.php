@@ -15,17 +15,64 @@
         $payhere_currency = $business_details->currency_code;
         $paid_amount = \App\TransactionPayment::where('transaction_id', $transaction->id)->sum('amount');
         $total_payable = $transaction->final_total - $paid_amount;
-        $payhere_amount = number_format($total_payable, 2, '.', '');
+        
+        // Get fee settings - use defaults if not set
+        $fee_enabled = $payhere_setting->enable_fee ?? true;
+        $fee_percentage = $payhere_setting->fee_percentage ?? 3.00;
+        $max_fee = $payhere_setting->max_fee_amount ?? 0;
+        
+        // Calculate convenience fee based on settings
+        $convenience_fee = 0;
+        if ($fee_enabled) {
+            $convenience_fee_rate = $fee_percentage / 100;
+            $convenience_fee = round($total_payable * $convenience_fee_rate, 2);
+            
+            // Apply max fee limit
+            if ($max_fee > 0 && $convenience_fee > $max_fee) {
+                $convenience_fee = $max_fee;
+            }
+        }
+        
+        $total_with_fee = $total_payable + $convenience_fee;
+        
+        // Use total WITH fee for PayHere
+        $payhere_amount = number_format($total_with_fee, 2, '.', '');
         $payhere_order_id = $transaction->invoice_no;
         $payhere_mode = $payhere_setting->mode ?? 'sandbox';
         
+        // Calculate hash with fee-included amount
         $hash_str = $payhere_merchant_id . $payhere_order_id . $payhere_amount . $payhere_currency . strtoupper(md5($payhere_secret));
         $payhere_hash = strtoupper(md5($hash_str));
+        
+        $fee_display_percent = $fee_percentage;
     @endphp
 
     <div class="row">
         <div class="col-md-12 text-center hidden-print" style="margin-top: 20px;">
             <h4 style="margin-bottom: 10px;">Pay with</h4>
+            
+            @if($fee_enabled && $convenience_fee > 0)
+            <!-- Fee Breakdown Display -->
+            <div style="background: #f9f9f9; padding: 15px; margin-bottom: 15px; border-radius: 5px; max-width: 400px; margin: 0 auto 15px; border: 1px solid #ddd;">
+                <table style="width: 100%; text-align: left; font-size: 14px;">
+                    <tr>
+                        <td style="padding: 5px 0;">Invoice Amount:</td>
+                        <td style="text-align: right; padding: 5px 0;"><strong>{{ $payhere_currency }} {{ number_format($total_payable, 2) }}</strong></td>
+                    </tr>
+                    <tr style="color: #666;">
+                        <td style="padding: 5px 0;">PayHere Handling Fee ({{ $fee_display_percent }}%):</td>
+                        <td style="text-align: right; padding: 5px 0;">{{ $payhere_currency }} {{ number_format($convenience_fee, 2) }}</td>
+                    </tr>
+                    <tr style="border-top: 2px solid #333; font-weight: bold; font-size: 16px;">
+                        <td style="padding: 10px 0 5px 0;">Total to Pay:</td>
+                        <td style="text-align: right; padding: 10px 0 5px 0; color: #28a745;">{{ $payhere_currency }} {{ number_format($total_with_fee, 2) }}</td>
+                    </tr>
+                </table>
+                <p style="margin: 10px 0 0 0; font-size: 11px; color: #999; text-align: center;">
+                    <i class="fa fa-info-circle"></i> Fee will be added to invoice after successful payment
+                </p>
+            </div>
+            @endif
             
             <!-- PayHere JS SDK -->
             <script type="text/javascript" src="https://www.payhere.lk/lib/payhere.js"></script>
@@ -39,18 +86,18 @@
             </div>
 
             <script>
-                // Payment Data Object
+                // Payment Data Object (with convenience fee included)
                 var payment = {
-                    "sandbox": "{{ $payhere_mode == 'live' ? false : true }}",
+                    "sandbox": {{ $payhere_mode == 'live' ? 'false' : 'true' }},
                     "merchant_id": "{{ $payhere_merchant_id }}",
                     "return_url": "{{ route('payhere.return', ['id' => $transaction->id]) }}",
                     "cancel_url": "{{ route('payhere.return', ['id' => $transaction->id]) }}",
                     "notify_url": "{{ route('payhere.notify') }}",
                     "order_id": "{{ $payhere_order_id }}",
-                    "items": "Invoice {{ $payhere_order_id }}",
-                    "amount": "{{ $payhere_amount }}",
+                    "items": "Invoice {{ $payhere_order_id }} (@if($fee_enabled && $convenience_fee > 0)incl. {{ $fee_display_percent }}% convenience fee @endif)",
+                    "amount": "{{ $payhere_amount }}", // Amount WITH fee
                     "currency": "{{ $payhere_currency }}",
-                    "hash": "{{ $payhere_hash }}",
+                    "hash": "{{ $payhere_hash }}", // Hash calculated with fee-included amount
                     "first_name": "{{ $transaction->contact->first_name }}",
                     "last_name": "{{ $transaction->contact->last_name ?? '' }}",
                     "email": "{{ $transaction->contact->email ?? '' }}",

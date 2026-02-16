@@ -33,11 +33,12 @@
     <div class="row">
         <div class="col-md-12">
             <div class="box box-primary">
-                <div class="box-header">
-                    <h3 class="box-title">General Settings</h3>
+                <div class="box-header with-border">
+                    <h3 class="box-title"><i class="fas fa-cog"></i> PayHere Configuration</h3>
                 </div>
                 <div class="box-body">
                     <div class="row">
+                        <!-- Merchant Settings -->
                         <div class="col-sm-4">
                             <div class="form-group">
                                 {!! Form::label('payhere_merchant_id', 'PayHere Merchant ID:') !!}
@@ -57,6 +58,8 @@
                             </div>
                         </div>
                         <div class="clearfix"></div>
+                        
+                        <!-- Mode & Account Settings -->
                         <div class="col-sm-3">
                             <div class="form-group">
                                 {!! Form::label('payhere_mode', 'PayHere Mode:') !!}
@@ -89,8 +92,51 @@
                             </div>
                         </div>
                         <div class="clearfix"></div>
+                        <div class="col-sm-12">
+                            <hr style="margin: 20px 0;">
+                        </div>
+                        
+                        <!-- Convenience Fee Settings -->
+                        <div class="col-sm-4">
+                            <div class="form-group">
+                                {!! Form::label('payhere_fee_percentage', 'Fee Percentage (%):') !!}
+                                @php
+                                    $fee_percentage = $payhere_setting?->fee_percentage ?? 3.00;
+                                @endphp
+                                {!! Form::number('payhere_fee_percentage', $fee_percentage, ['class' => 'form-control', 'placeholder' => 'e.g. 3.00', 'min' => '0', 'max' => '100', 'step' => '0.01']); !!}
+                                <p class="help-block">Percentage of invoice to charge as convenience fee (e.g., 3 for 3%).</p>
+                            </div>
+                        </div>
+                        <div class="col-sm-4">
+                            <div class="form-group">
+                                {!! Form::label('payhere_max_fee_amount', 'Maximum Fee Amount:') !!}
+                                @php
+                                    $max_fee = $payhere_setting?->max_fee_amount ?? 0;
+                                @endphp
+                                {!! Form::number('payhere_max_fee_amount', $max_fee, ['class' => 'form-control', 'placeholder' => 'e.g. 500', 'min' => '0', 'step' => '0.01']); !!}
+                                <p class="help-block">Maximum convenience fee to charge. Set 0 for no limit.</p>
+                            </div>
+                        </div>
+                        <div class="col-sm-4">
+                            <div class="form-group">
+                                {!! Form::label('payhere_enable_fee', 'Enable Convenience Fee:') !!}
+                                <div class="checkbox">
+                                    <label>
+                                        @php
+                                            $fee_enabled = isset($payhere_setting->enable_fee) ? $payhere_setting->enable_fee : true;
+                                        @endphp
+                                        {!! Form::checkbox('payhere_enable_fee', '1', $fee_enabled); !!}
+                                        Charge convenience fee on PayHere payments
+                                    </label>
+                                </div>
+                                <p class="help-block">When enabled, a convenience fee will be added to the invoice.</p>
+                            </div>
+                        </div>
+                        <div class="clearfix"></div>
+                        
+                        <!-- Single Save Button -->
                         <div class="col-sm-12 text-center" style="margin-top: 20px;">
-                            <button type="submit" class="btn btn-primary btn-big">Update Settings</button>
+                            <button type="submit" class="btn btn-primary btn-lg"><i class="fas fa-save"></i> Update Settings</button>
                         </div>
                     </div>
                 </div>
