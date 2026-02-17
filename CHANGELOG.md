@@ -5,6 +5,16 @@ All notable changes to the PayHere UltimatePOS Connector will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-02-17
+
+### Fixed
+- **Partial Payment Bug**: Fixed incorrect amount calculation for partial payments
+  - Previously, PayHere would charge the total invoice amount even when partial payments had been made
+  - **Example**: Invoice of ₨1000 with ₨400 already paid would still charge ₨1000 (+ fee)
+  - **Solution**: Now correctly calculates remaining balance (₨600) and charges only that amount (+ fee on ₨600)
+  - **Impact**: Customers are now charged the correct remaining balance, not the full invoice amount
+  - **Files Changed**: `invoice_hook.blade.php` and `guest_payment_hook.blade.php`
+
 ## [1.1.1] - 2026-02-17
 
 ### Fixed
