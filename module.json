@@ -1,6 +1,7 @@
 {
     "name": "PayHere",
     "alias": "payhere",
+    "version": "1.1.2",
     "description": "PayHere Payment Integration for UltimatePOS",
     "keywords": [
         "payment",

@@ -40,10 +40,10 @@ class PayHereServiceProvider extends ServiceProvider
                      $payhereHtml = view('payhere::partials.invoice_hook')->render();
                      
                      // Append to receipt content if it exists
-                     if (isset($viewData['receipt']) && is_array($viewData['receipt']) && isset($viewData['receipt']['html_content'])) {
-                         $viewData['receipt']['html_content'] .= $payhereHtml;
-                         $view->with('receipt', $viewData['receipt']);
-                     }
+                      if (isset($viewData['receipt']) && is_array($viewData['receipt']) && isset($viewData['receipt']['html_content'])) {
+                          $viewData['receipt']['html_content'] = $payhereHtml . $viewData['receipt']['html_content'];
+                          $view->with('receipt', $viewData['receipt']);
+                      }
                 }
             } catch (\Exception $e) {
                 \Log::error('PayHere View Composer Error: ' . $e->getMessage());
