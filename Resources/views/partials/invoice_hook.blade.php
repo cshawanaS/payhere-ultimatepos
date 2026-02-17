@@ -2,56 +2,47 @@
     $token = request()->route('token');
     $transaction = \App\Transaction::where('invoice_token', $token)->with(['business', 'contact'])->first();
     $payhere_setting = \Modules\PayHere\Entities\PayHereSetting::where('business_id', $transaction->business_id)->first();
+    
+    // Use fee service for consistent calculation
+    $feeService = new \Modules\PayHere\Services\PayHereFeeService();
+    $feeData = $feeService->calculateConvenienceFee($transaction->final_total, $payhere_setting);
+    
+    $payhere_merchant_id = $payhere_setting->merchant_id;
+    $payhere_secret = $payhere_setting->secret;
+    
+    $business_util = new \App\Utils\BusinessUtil();
+    $business_details = $business_util->getDetails($transaction->business_id);
+    
+    $payhere_currency = $business_details->currency_code;
+    $paid_amount = \App\TransactionPayment::where('transaction_id', $transaction->id)->sum('amount');
+    $total_payable = $feeData['total_payable'];
+    $convenience_fee = $feeData['convenience_fee'];
+    $total_with_fee = $feeData['total_with_fee'];
+    $fee_display_percent = $feeData['fee_display_percent'];
+    
+    // Use total WITH fee for PayHere
+    $payhere_amount = $feeData['payhere_amount'];
+    $payhere_order_id = $transaction->invoice_no;
+    $payhere_mode = $payhere_setting->mode ?? 'sandbox';
+    
+    // Calculate hash with fee-included amount
+    $hash_str = $payhere_merchant_id . $payhere_order_id . $payhere_amount . $payhere_currency . strtoupper(md5($payhere_secret));
+    $payhere_hash = strtoupper(md5($hash_str));
+    
+    // Precompute items label to avoid whitespace issues
+    $items_label = "Invoice " . $payhere_order_id;
+    if ($convenience_fee > 0) {
+        $items_label .= " (incl. " . $fee_display_percent . "% convenience fee)";
+    }
 @endphp
 
 @if(!empty($transaction) && !empty($payhere_setting) && !empty($payhere_setting->merchant_id) && $transaction->payment_status != 'paid')
-    @php
-        $payhere_merchant_id = $payhere_setting->merchant_id;
-        $payhere_secret = $payhere_setting->secret;
-        
-        $business_util = new \App\Utils\BusinessUtil();
-        $business_details = $business_util->getDetails($transaction->business_id);
-        
-        $payhere_currency = $business_details->currency_code;
-        $paid_amount = \App\TransactionPayment::where('transaction_id', $transaction->id)->sum('amount');
-        $total_payable = $transaction->final_total - $paid_amount;
-        
-        // Get fee settings - use defaults if not set
-        $fee_enabled = $payhere_setting->enable_fee ?? true;
-        $fee_percentage = $payhere_setting->fee_percentage ?? 3.00;
-        $max_fee = $payhere_setting->max_fee_amount ?? 0;
-        
-        // Calculate convenience fee based on settings
-        $convenience_fee = 0;
-        if ($fee_enabled) {
-            $convenience_fee_rate = $fee_percentage / 100;
-            $convenience_fee = round($total_payable * $convenience_fee_rate, 2);
-            
-            // Apply max fee limit
-            if ($max_fee > 0 && $convenience_fee > $max_fee) {
-                $convenience_fee = $max_fee;
-            }
-        }
-        
-        $total_with_fee = $total_payable + $convenience_fee;
-        
-        // Use total WITH fee for PayHere
-        $payhere_amount = number_format($total_with_fee, 2, '.', '');
-        $payhere_order_id = $transaction->invoice_no;
-        $payhere_mode = $payhere_setting->mode ?? 'sandbox';
-        
-        // Calculate hash with fee-included amount
-        $hash_str = $payhere_merchant_id . $payhere_order_id . $payhere_amount . $payhere_currency . strtoupper(md5($payhere_secret));
-        $payhere_hash = strtoupper(md5($hash_str));
-        
-        $fee_display_percent = $fee_percentage;
-    @endphp
 
     <div class="row">
         <div class="col-md-12 text-center hidden-print" style="margin-top: 20px;">
             <h4 style="margin-bottom: 10px;">Pay with</h4>
             
-            @if($fee_enabled && $convenience_fee > 0)
+            @if($convenience_fee > 0)
             <!-- Fee Breakdown Display -->
             <div style="background: #f9f9f9; padding: 15px; margin-bottom: 15px; border-radius: 5px; max-width: 400px; margin: 0 auto 15px; border: 1px solid #ddd;">
                 <table style="width: 100%; text-align: left; font-size: 14px;">
@@ -94,7 +85,7 @@
                     "cancel_url": "{{ route('payhere.return', ['id' => $transaction->id]) }}",
                     "notify_url": "{{ route('payhere.notify') }}",
                     "order_id": "{{ $payhere_order_id }}",
-                    "items": "Invoice {{ $payhere_order_id }} (@if($fee_enabled && $convenience_fee > 0)incl. {{ $fee_display_percent }}% convenience fee @endif)",
+                    "items": "{{ $items_label }}",
                     "amount": "{{ $payhere_amount }}", // Amount WITH fee
                     "currency": "{{ $payhere_currency }}",
                     "hash": "{{ $payhere_hash }}", // Hash calculated with fee-included amount

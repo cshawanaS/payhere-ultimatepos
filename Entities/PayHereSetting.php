@@ -40,6 +40,6 @@ class PayHereSetting extends Model
     protected $attributes = [
         'fee_percentage' => 3.00,
         'max_fee_amount' => 0,
-        'enable_fee' => true,
+        'enable_fee' => false,
     ];
 }

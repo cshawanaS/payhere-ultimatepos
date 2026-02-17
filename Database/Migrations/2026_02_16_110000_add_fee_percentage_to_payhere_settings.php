@@ -16,7 +16,7 @@ class AddFeePercentageToPayhereSettings extends Migration
         Schema::table('payhere_module_settings', function (Blueprint $table) {
             $table->decimal('fee_percentage', 5, 2)->default(3.00)->nullable()->after('payment_method');
             $table->decimal('max_fee_amount', 12, 2)->default(0)->nullable()->after('fee_percentage');
-            $table->boolean('enable_fee')->default(true)->nullable()->after('max_fee_amount');
+            $table->boolean('enable_fee')->default(false)->nullable()->after('max_fee_amount');
         });
     }
 
