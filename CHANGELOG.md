@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Impact**: Customers are now charged the correct remaining balance, not the full invoice amount
   - **Files Changed**: `invoice_hook.blade.php` and `guest_payment_hook.blade.php`
 
+### Changed
+- **UI Improvement**: Switched PayHere button insertion to prepend instead of append in the receipt view
+  - This ensures the "Pay with PayHere" button appears more prominently at the top of the payment section
+- **Code Stability**: Refactored the payment initialization script into an IIFE (Immediately Invoked Function Expression)
+  - Prevents global scope pollution and potential script conflicts
+  - Improved error handling for PayHere SDK callbacks
+
 ## [1.1.1] - 2026-02-17
 
 ### Fixed
