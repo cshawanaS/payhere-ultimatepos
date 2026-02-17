@@ -3,10 +3,6 @@
     $transaction = \App\Transaction::where('invoice_token', $token)->with(['business', 'contact'])->first();
     $payhere_setting = \Modules\PayHere\Entities\PayHereSetting::where('business_id', $transaction->business_id)->first();
     
-    // Use fee service for consistent calculation
-    $feeService = new \Modules\PayHere\Services\PayHereFeeService();
-    $feeData = $feeService->calculateConvenienceFee($transaction->final_total, $payhere_setting);
-    
     $payhere_merchant_id = $payhere_setting->merchant_id;
     $payhere_secret = $payhere_setting->secret;
     
@@ -14,7 +10,15 @@
     $business_details = $business_util->getDetails($transaction->business_id);
     
     $payhere_currency = $business_details->currency_code;
+    
+    // Calculate remaining balance for partial payments
     $paid_amount = \App\TransactionPayment::where('transaction_id', $transaction->id)->sum('amount');
+    $remaining_balance = $transaction->final_total - $paid_amount;
+    
+    // Use fee service for consistent calculation on REMAINING BALANCE
+    $feeService = new \Modules\PayHere\Services\PayHereFeeService();
+    $feeData = $feeService->calculateConvenienceFee($remaining_balance, $payhere_setting);
+    
     $total_payable = $feeData['total_payable'];
     $convenience_fee = $feeData['convenience_fee'];
     $total_with_fee = $feeData['total_with_fee'];
