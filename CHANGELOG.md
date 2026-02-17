@@ -5,6 +5,13 @@ All notable changes to the PayHere UltimatePOS Connector will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] - 2026-02-17
+
+### Fixed
+- **Guest Redirect Issue**: Fixed issue where guest users were redirected to the login page after successful payment instead of returning to the invoice.
+  - **Root Cause**: The return route was protected by the `auth` middleware.
+  - **Solution**: Moved the return route to a guest-safe group.
+
 ## [1.1.2] - 2026-02-17
 
 ### Fixed
