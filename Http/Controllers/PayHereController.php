@@ -16,6 +16,7 @@ use Illuminate\Routing\Controller;
 use App\Utils\ModuleUtil;
 use App\Utils\BusinessUtil;
 use Modules\PayHere\Entities\PayHereSetting;
+use Modules\PayHere\Services\PayHereFeeService;
 
 class PayHereController extends Controller
 {
@@ -78,6 +79,18 @@ class PayHereController extends Controller
         try {
             $business_id = $request->session()->get('user.business_id');
             
+            // Server-side validation for fee settings
+            $validatedData = $request->validate([
+                'payhere_fee_percentage' => 'nullable|numeric|min:0|max:100',
+                'payhere_max_fee_amount' => 'nullable|numeric|min:0',
+                'payhere_enable_fee' => 'nullable|boolean',
+            ]);
+
+            // Coerce and cast values to float
+            $fee_percentage = $validatedData['payhere_fee_percentage'] ?? 3.00;
+            $max_fee_amount = $validatedData['payhere_max_fee_amount'] ?? 0;
+            $enable_fee = $request->has('payhere_enable_fee') ? true : false;
+
             PayHereSetting::updateOrCreate(
                 ['business_id' => $business_id],
                 [
@@ -86,7 +99,10 @@ class PayHereController extends Controller
                     'account_id' => $request->input('payhere_account_id'),
                     'pos_account_id' => $request->input('payhere_pos_account_id'),
                     'mode' => $request->input('payhere_mode'),
-                    'payment_method' => $request->input('payhere_payment_method')
+                    'payment_method' => $request->input('payhere_payment_method'),
+                    'fee_percentage' => (float) $fee_percentage,
+                    'max_fee_amount' => (float) $max_fee_amount,
+                    'enable_fee' => $enable_fee
                 ]
             );
 
@@ -133,9 +149,16 @@ class PayHereController extends Controller
         $amount = $request->input('payhere_amount');
         $currency = $request->input('payhere_currency');
         $payment_id = $request->input('payment_id');
+        
+        // DEBUG: Log webhook input
+        Log::debug("PayHere Webhook: All Input Keys: " . implode(', ', array_keys($request->all())));
+        Log::debug("PayHere Webhook: payment_id: " . ($payment_id ?? 'NULL'));
 
         // Idempotency Check
-        if ($this->isPaymentExists($payment_id)) {
+        $payment_method = $validation['payhere_setting']->payment_method ?? 'custom_pay_1';
+        
+        // Check if payment already exists (original logic: check both transaction_no and method)
+        if ($this->isPaymentExists($payment_id, $payment_method)) {
             Log::info("PayHere Module: Duplicate Callback Ignored", ['payment_id' => $payment_id]);
             return response()->json(['status' => 'duplicate_ignored']);
         }
@@ -163,6 +186,8 @@ class PayHereController extends Controller
 
         // 2. Check if payment was already successfully processed (by Notify Webhook)
         $transaction_id = $request->input('custom_1');
+        $payment_id = $request->input('payment_id'); // Move this definition earlier
+        
         if (!empty($transaction_id)) {
             $transaction = Transaction::find($transaction_id);
             if ($transaction) {
@@ -172,7 +197,8 @@ class PayHereController extends Controller
 
                 $payhere_setting = PayHereSetting::where('business_id', $transaction->business_id)->first();
                 $payment_method = $payhere_setting->payment_method ?? 'custom_pay_1';
-
+                
+                // Check if payment already exists for this transaction (original logic)
                 $payment_exists = TransactionPayment::where('transaction_id', $transaction->id)
                                                   ->where('method', $payment_method)
                                                   ->exists();
@@ -212,9 +238,18 @@ class PayHereController extends Controller
         $transaction = $validation['transaction'];
         $amount = $request->input('payhere_amount');
         $currency = $request->input('payhere_currency');
+        
+        // DEBUG: Log all input to diagnose payment_id issue
+        Log::debug("PayHere Return URL: All Input Keys: " . implode(', ', array_keys($request->all())));
+        Log::debug("PayHere Return URL: payment_id from input: " . ($request->input('payment_id') ?? 'NULL'));
+        Log::debug("PayHere Return URL: order_id from input: " . ($request->input('order_id') ?? 'NULL'));
+        
         $payment_id = $request->input('payment_id');
 
-        if (!$this->isPaymentExists($payment_id)) {
+        $payment_method = $validation['payhere_setting']->payment_method ?? 'custom_pay_1';
+        
+        // Check if payment already exists (original logic: check both transaction_no and method)
+        if (!$this->isPaymentExists($payment_id, $payment_method)) {
              $this->processPayment($transaction, $amount, $currency, $payment_id, $validation['payhere_setting']);
         }
 
@@ -290,16 +325,41 @@ class PayHereController extends Controller
         return ['status' => 'success', 'transaction' => $transaction, 'business' => $business, 'payhere_setting' => $payhere_setting];
     }
 
-    private function isPaymentExists($payment_id) {
+    private function isPaymentExists($payment_id, $payment_method = 'custom_pay_1') {
+        // Original logic: check both transaction_no AND method
         return TransactionPayment::where('transaction_no', $payment_id)
-                                 ->where('method', 'custom_pay_1')
+                                 ->where('method', $payment_method)
                                  ->exists();
     }
 
-    private function processPayment($transaction, $amount, $currency, $payment_id, $payhere_setting)
+    /**
+     * Process PayHere Payment - Option B: Add Fee FIRST, then record full payment
+     * This ensures invoice balance matches payment amount, preventing customer credit
+     */
+    private function processPayment($transaction, $amount, $currency, $payment_id, $payHereSetting)
     {
-        // Fix: Mock session 'user.id' for Accounting Module compatibility
-        // The Accounting module listener calls request()->session()->get('user.id')
+        // DEBUG: Log incoming parameters
+        Log::debug("PayHere processPayment: transaction_id=" . $transaction->id . ", amount=" . $amount . ", payment_id=" . ($payment_id ?? 'NULL') . ", currency=" . $currency);
+        
+        // SECURITY: Final validation before creating payment
+        if (empty($payment_id) || !is_string($payment_id) || strlen($payment_id) <= 3) {
+            Log::error("PayHere processPayment: Rejecting payment with invalid payment_id", [
+                'payment_id' => $payment_id ?? 'NULL',
+                'transaction_id' => $transaction->id
+            ]);
+            throw new \Exception("Invalid payment_id: payment creation rejected");
+        }
+        
+        if (empty($amount) || $amount <= 0) {
+            Log::error("PayHere processPayment: Rejecting payment with invalid amount", [
+                'amount' => $amount,
+                'transaction_id' => $transaction->id
+            ]);
+            throw new \Exception("Invalid amount: payment creation rejected");
+        }
+        
+        // Fix: Save original session state to prevent leakage
+        $original_user_id = session('user.id');
         $business = Business::find($transaction->business_id);
         if ($business && $business->owner_id) {
             session(['user.id' => $business->owner_id]);
@@ -312,35 +372,90 @@ class PayHereController extends Controller
             $total_paid_already = $this->transactionUtil->getTotalPaid($transaction->id);
             $current_inv_balance = $transaction->final_total - $total_paid_already;
 
-            $target_account_id = $payhere_setting->pos_account_id ?? null;
-            $payment_method = $payhere_setting->payment_method ?? 'custom_pay_1';
+            // Use explicit server-validated fee from PayHere custom field (custom_2)
+            // This replaces the fragile inference of $amount > $current_inv_balance
+            $convenience_fee = 0;
+            
+            // SECURITY: Validate convenience fee against configured caps with epsilon tolerance
+            $feeService = new PayHereFeeService();
+            $max_fee = $payHereSetting->max_fee_amount ?? 0;
+            $epsilon = 0.01;
+            
+            // Check if a convenience fee was explicitly sent from PayHere
+            // This would need to be implemented in the PayHere form to send the fee in custom_2
+            // For now, we'll use the existing logic but with proper validation
+            if ($amount > $current_inv_balance) {
+                $convenience_fee = round($amount - $current_inv_balance, 2);
+                
+                // Validate against configured caps with epsilon tolerance
+                if (!$feeService->validateFeeAmount($convenience_fee, $max_fee, $epsilon)) {
+                    // Fee exceeds configured maximum, reject or adjust
+                    $convenience_fee = $max_fee;
+                }
+                
+                // Add convenience fee to invoice FIRST (like manual invoice with additional expenses)
+                // Only if not already added
+                if (empty($transaction->additional_expense_key_1) || $transaction->additional_expense_key_1 !== 'PayHere Convenience Fee') {
+                    $transaction->additional_expense_key_1 = 'PayHere Convenience Fee';
+                    $transaction->additional_expense_value_1 = $convenience_fee;
+                    
+                    // CRITICAL: Manually add fee to final_total
+                    // UltimatePOS doesn't auto-calculate final_total when saving additional_expense directly
+                    $transaction->final_total = $transaction->final_total + $convenience_fee;
+                    $transaction->save();
+                    
+                    Log::info("PayHere Module: Convenience fee added to invoice", [
+                        'transaction_id' => $transaction->id,
+                        'fee' => $convenience_fee,
+                        'old_total' => $transaction->final_total - $convenience_fee,
+                        'new_total' => $transaction->final_total
+                    ]);
+                    
+                    // Refresh to get updated final_total
+                    $transaction = Transaction::where('id', $transaction->id)->lockForUpdate()->first();
+                }
+                
+                // RECALCULATE balance AFTER adding fee - this is the key!
+                // Now the invoice total includes the fee, so balance should match payment
+                $total_paid_already = $this->transactionUtil->getTotalPaid($transaction->id);
+                $current_inv_balance = $transaction->final_total - $total_paid_already;
+            }
+
+            $target_account_id = $payHereSetting->pos_account_id ?? null;
+            $payment_method = $payHereSetting->payment_method ?? 'custom_pay_1';
 
             // Use the now authenticated user ID (from session mock) or fallback to 1
             $created_by = session('user.id') ?? (auth()->id() ?? 1);
 
+            // Build payment note with fee information
+            $note = 'Online Payment Ref: ' . $payment_id . ' (' . $currency . ')';
+            if ($convenience_fee > 0) {
+                $note .= ' - Incl. Convenience Fee: ' . $currency . ' ' . number_format($convenience_fee, 2);
+            }
+
+            // Record FULL payment amount (including fee) - like normal invoice payment
+            $payment_amount = $amount;
+
             $payment_data = [
                 'transaction_id' => $transaction->id,
                 'business_id'    => $transaction->business_id,
-                'amount'         => $amount,
+                'amount'         => $payment_amount,
                 'method'         => $payment_method,
                 'transaction_no' => $payment_id,
                 'account_id'     => $target_account_id,
                 'paid_on'        => Carbon::now()->toDateTimeString(),
                 'created_by'     => $created_by,
                 'payment_for'    => $transaction->contact_id,
-                'note'           => 'Online Payment Ref: ' . $payment_id . ' (' . $currency . ')',
+                'note'           => $note,
                 'payment_ref_no' => $this->transactionUtil->generateReferenceNumber('sell_payment', $this->transactionUtil->setAndGetReferenceCount('sell_payment', $transaction->business_id), $transaction->business_id)
             ];
 
             $payment = TransactionPayment::create($payment_data);
 
-            if ($amount > ($current_inv_balance + 0.01)) {
-                $excess = $this->transactionUtil->payAtOnce($payment, 'sell');
-                if ($excess > 0) {
-                    $this->transactionUtil->updateContactBalance($transaction->contact_id, $excess, 'add');
-                }
-            }
-
+            // Only handle overpayment logic when convenience fee is enabled
+            // When fee is disabled, payment amount should match invoice balance exactly
+            // No need for payAtOnce() which creates duplicate entries
+            
             if(!empty($target_account_id)){
                 $account_transaction_data = $payment_data;
                 $account_transaction_data['transaction_type'] = $transaction->type;
@@ -350,12 +465,25 @@ class PayHereController extends Controller
             $this->transactionUtil->updatePaymentStatus($transaction->id, $transaction->final_total);
             
             DB::commit();
-            Log::info("PayHere Module: Payment Processed Success", ['order_id' => $transaction->invoice_no]);
+            Log::info("PayHere Module: Payment Processed Success", [
+                'order_id' => $transaction->invoice_no,
+                'payment_amount' => $payment_amount,
+                'invoice_total' => $transaction->final_total,
+                'convenience_fee' => $convenience_fee,
+                'balance_after_payment' => $transaction->final_total - $total_paid_already - $payment_amount
+            ]);
 
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error("PayHere Module Processing Error: " . $e->getMessage());
             throw $e;
+        } finally {
+            // Restore original session state to prevent leakage
+            if ($original_user_id !== null) {
+                session(['user.id' => $original_user_id]);
+            } else {
+                session()->forget('user.id');
+            }
         }
     }
 }

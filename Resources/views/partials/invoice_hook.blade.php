@@ -2,30 +2,72 @@
     $token = request()->route('token');
     $transaction = \App\Transaction::where('invoice_token', $token)->with(['business', 'contact'])->first();
     $payhere_setting = \Modules\PayHere\Entities\PayHereSetting::where('business_id', $transaction->business_id)->first();
+    
+    $payhere_merchant_id = $payhere_setting->merchant_id;
+    $payhere_secret = $payhere_setting->secret;
+    
+    $business_util = new \App\Utils\BusinessUtil();
+    $business_details = $business_util->getDetails($transaction->business_id);
+    
+    $payhere_currency = $business_details->currency_code;
+    
+    // Calculate remaining balance for partial payments
+    $paid_amount = \App\TransactionPayment::where('transaction_id', $transaction->id)->sum('amount');
+    $remaining_balance = $transaction->final_total - $paid_amount;
+    
+    // Use fee service for consistent calculation on REMAINING BALANCE
+    $feeService = new \Modules\PayHere\Services\PayHereFeeService();
+    $feeData = $feeService->calculateConvenienceFee($remaining_balance, $payhere_setting);
+    
+    $total_payable = $feeData['total_payable'];
+    $convenience_fee = $feeData['convenience_fee'];
+    $total_with_fee = $feeData['total_with_fee'];
+    $fee_display_percent = $feeData['fee_display_percent'];
+    
+    // Use total WITH fee for PayHere
+    $payhere_amount = $feeData['payhere_amount'];
+    $payhere_order_id = $transaction->invoice_no;
+    $payhere_mode = $payhere_setting->mode ?? 'sandbox';
+    
+    // Calculate hash with fee-included amount
+    $hash_str = $payhere_merchant_id . $payhere_order_id . $payhere_amount . $payhere_currency . strtoupper(md5($payhere_secret));
+    $payhere_hash = strtoupper(md5($hash_str));
+    
+    // Precompute items label to avoid whitespace issues
+    $items_label = "Invoice " . $payhere_order_id;
+    if ($convenience_fee > 0) {
+        $items_label .= " (incl. " . $fee_display_percent . "% convenience fee)";
+    }
 @endphp
 
 @if(!empty($transaction) && !empty($payhere_setting) && !empty($payhere_setting->merchant_id) && $transaction->payment_status != 'paid')
-    @php
-        $payhere_merchant_id = $payhere_setting->merchant_id;
-        $payhere_secret = $payhere_setting->secret;
-        
-        $business_util = new \App\Utils\BusinessUtil();
-        $business_details = $business_util->getDetails($transaction->business_id);
-        
-        $payhere_currency = $business_details->currency_code;
-        $paid_amount = \App\TransactionPayment::where('transaction_id', $transaction->id)->sum('amount');
-        $total_payable = $transaction->final_total - $paid_amount;
-        $payhere_amount = number_format($total_payable, 2, '.', '');
-        $payhere_order_id = $transaction->invoice_no;
-        $payhere_mode = $payhere_setting->mode ?? 'sandbox';
-        
-        $hash_str = $payhere_merchant_id . $payhere_order_id . $payhere_amount . $payhere_currency . strtoupper(md5($payhere_secret));
-        $payhere_hash = strtoupper(md5($hash_str));
-    @endphp
 
     <div class="row">
         <div class="col-md-12 text-center hidden-print" style="margin-top: 20px;">
             <h4 style="margin-bottom: 10px;">Pay with</h4>
+            
+            @if($convenience_fee > 0)
+            <!-- Fee Breakdown Display -->
+            <div style="background: #f9f9f9; padding: 15px; margin-bottom: 15px; border-radius: 5px; max-width: 400px; margin: 0 auto 15px; border: 1px solid #ddd;">
+                <table style="width: 100%; text-align: left; font-size: 14px;">
+                    <tr>
+                        <td style="padding: 5px 0;">Invoice Amount:</td>
+                        <td style="text-align: right; padding: 5px 0;"><strong>{{ $payhere_currency }} {{ number_format($total_payable, 2) }}</strong></td>
+                    </tr>
+                    <tr style="color: #666;">
+                        <td style="padding: 5px 0;">PayHere Handling Fee ({{ $fee_display_percent }}%):</td>
+                        <td style="text-align: right; padding: 5px 0;">{{ $payhere_currency }} {{ number_format($convenience_fee, 2) }}</td>
+                    </tr>
+                    <tr style="border-top: 2px solid #333; font-weight: bold; font-size: 16px;">
+                        <td style="padding: 10px 0 5px 0;">Total to Pay:</td>
+                        <td style="text-align: right; padding: 10px 0 5px 0; color: #28a745;">{{ $payhere_currency }} {{ number_format($total_with_fee, 2) }}</td>
+                    </tr>
+                </table>
+                <p style="margin: 10px 0 0 0; font-size: 11px; color: #999; text-align: center;">
+                    <i class="fa fa-info-circle"></i> Fee will be added to invoice after successful payment
+                </p>
+            </div>
+            @endif
             
             <!-- PayHere JS SDK -->
             <script type="text/javascript" src="https://www.payhere.lk/lib/payhere.js"></script>
@@ -39,18 +81,18 @@
             </div>
 
             <script>
-                // Payment Data Object
+                // Payment Data Object (with convenience fee included)
                 var payment = {
-                    "sandbox": "{{ $payhere_mode == 'live' ? false : true }}",
+                    "sandbox": {{ $payhere_mode == 'live' ? 'false' : 'true' }},
                     "merchant_id": "{{ $payhere_merchant_id }}",
                     "return_url": "{{ route('payhere.return', ['id' => $transaction->id]) }}",
                     "cancel_url": "{{ route('payhere.return', ['id' => $transaction->id]) }}",
                     "notify_url": "{{ route('payhere.notify') }}",
                     "order_id": "{{ $payhere_order_id }}",
-                    "items": "Invoice {{ $payhere_order_id }}",
-                    "amount": "{{ $payhere_amount }}",
+                    "items": "{{ $items_label }}",
+                    "amount": "{{ $payhere_amount }}", // Amount WITH fee
                     "currency": "{{ $payhere_currency }}",
-                    "hash": "{{ $payhere_hash }}",
+                    "hash": "{{ $payhere_hash }}", // Hash calculated with fee-included amount
                     "first_name": "{{ $transaction->contact->first_name }}",
                     "last_name": "{{ $transaction->contact->last_name ?? '' }}",
                     "email": "{{ $transaction->contact->email ?? '' }}",
